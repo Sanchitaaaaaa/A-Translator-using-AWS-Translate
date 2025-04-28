@@ -1,0 +1,155 @@
+const AWS = require('aws-sdk');
+const translate = new AWS.Translate();
+const dynamodb = new AWS.DynamoDB.DocumentClient();
+
+exports.handler = async (event) = {
+    const { userId, sourceLanguage, targetLanguage, text } = JSON.parse(event.body);
+
+     Generate a unique translation ID
+    const translationId = `translation-${Date.now()}`;
+
+     Store translation request in DynamoDB (status 'in-progress')
+    const params = {
+        TableName 'Translations',
+        Item {
+            translationId translationId,
+            userId userId,
+            sourceLanguage sourceLanguage,
+            targetLanguage targetLanguage,
+            text text,
+            status 'in-progress',
+            translatedText null,
+            timestamp new Date().toISOString()
+        }
+    };
+
+    try {
+         Save translation request to DynamoDB
+        await dynamodb.put(params).promise();
+
+         Call Amazon Translate to translate the text
+        const translateParams = {
+            TextList [text],
+            SourceLanguageCode sourceLanguage,
+            TargetLanguageCode targetLanguage
+        };
+
+        const result = await translate.translateText(translateParams).promise();
+
+         After translation, update the DynamoDB status and add translated text
+        const updateParams = {
+            TableName 'Translations',
+            Key { translationId translationId },
+            UpdateExpression 'set #status = status, translatedText = translatedText',
+            ExpressionAttributeNames {
+                '#status' 'status'
+            },
+            ExpressionAttributeValues {
+                'status' 'completed',
+                'translatedText' result.TranslatedText
+            }
+        };
+
+        await dynamodb.update(updateParams).promise();
+
+         Return response
+        return {
+            statusCode 200,
+            body JSON.stringify({
+                translationId translationId,
+                status 'Translation in progress, check the status later'
+            })
+        };
+    } catch (err) {
+        return {
+            statusCode 500,
+            body JSON.stringify({ error 'Translation failed', message err.message })
+        };
+    }
+};
+--------------------------------------------------------------------
+Create Lambda Function for Checking Status
+Create another Lambda function (e.g., checkTranslationStatus).
+This function will
+Query the translation status from the database (e.g., DynamoDB).
+Return whether the translation is in progress, completed, or failed.
+--------------------------------------------------------------------
+const AWS = require('aws-sdk');
+const dynamodb = new AWS.DynamoDB.DocumentClient();
+
+exports.handler = async (event) = {
+    const { translationId } = event.pathParameters;
+
+    const params = {
+        TableName 'Translations',
+        Key {
+            translationId translationId
+        }
+    };
+
+    try {
+         Retrieve the translation request from DynamoDB
+        const result = await dynamodb.get(params).promise();
+
+        if (!result.Item) {
+            return {
+                statusCode 404,
+                body JSON.stringify({ error 'Translation not found' })
+            };
+        }
+
+        const translationStatus = result.Item.status;
+        let responseMessage;
+
+         If translation is completed, return the translated text
+        if (translationStatus === 'completed') {
+            responseMessage = {
+                status 'completed',
+                translatedText result.Item.translatedText
+            };
+        } else {
+            responseMessage = {
+                status 'in-progress',
+                translatedText null
+            };
+        }
+
+         Return translation status
+        return {
+            statusCode 200,
+            body JSON.stringify(responseMessage)
+        };
+    } catch (err) {
+        return {
+            statusCode 500,
+            body JSON.stringify({ error 'Failed to retrieve translation status', message err.message })
+        };
+    }
+};
+--------------------------------------------------------------------
+
+Integrate Lambda with API Gateway
+Link the translateText Lambda function to the POST translate endpoint in API Gateway.
+Link the checkTranslationStatus Lambda function to the GET status{translationId} endpoint in API Gateway.
+
+5. Set Up Amazon Translate for Language Translation
+Goal Use Amazon Translate to perform text translations.
+Steps
+Configure Amazon Translate
+In the Lambda function that performs the translation, use the AWS SDK for Amazon Translate to perform text translation.
+The basic API call looks like this
+--------------------------------------------------------------------
+const translate = new AWS.Translate();
+const params = {
+    TextList ['Hello, world!'],  The text to be translated
+    SourceLanguageCode 'en',
+    TargetLanguageCode 'es'
+};
+
+translate.translateText(params, function(err, data) {
+    if (err) {
+        console.log(Error, err);
+    } else {
+        console.log(Translated Text, data.TranslatedText);
+    }
+});
